@@ -5,11 +5,14 @@ import numpy as np
 import os
 from openai import OpenAI
 
-client = OpenAI(base_url="https://api.groq.com/openai/v1", api_key=os.environ.get('GROQ_API_KEY'))
+client = OpenAI(base_url="https://api.groq.com/openai/v1",
+                api_key=os.environ.get('GROQ_API_KEY'))
+
 
 def load_model(filename):
   with open(filename, "rb") as file:
     return pickle.load(file)
+
 
 xgboost_model = load_model('xgb_model.pkl')
 
@@ -29,42 +32,50 @@ xgboost_SMOTE_model = load_model('xgboost-SMOTE.pkl')
 
 xgboost_featureEngineered_model = load_model('xgboost-featureEnginered.pkl')
 
-def prepare_input(credit_score, location, gender, age, tenure, balance, num_products, has_credit_card, is_active_member, estimated_salary):
+
+def prepare_input(credit_score, location, gender, age, tenure, balance,
+                  num_products, has_credit_card, is_active_member,
+                  estimated_salary):
 
   input_dict = {
-    'CreditScore': credit_score,
-    'Age': age,
-    "Tenure": tenure,
-    "Balance": balance,
-    "NumOfProducts": num_products,
-    "HasCreditCard": has_credit_card,
-    "IsActiveMember": is_active_member,
-    "EstimatedSalary": estimated_salary,
-    "Geography_France": 1 if location == "France" else 0,
-    "Geography_Germany": 1 if location == "Germany" else 0,
-    "Geography_Spain": 1 if location == "Spain" else 0,
-    # "Gender_Male": 1 if gender == "Male" else 0,
+      'CreditScore': credit_score,
+      'Age': age,
+      "Tenure": tenure,
+      "Balance": balance,
+      "NumOfProducts": num_products,
+      "HasCreditCard": has_credit_card,
+      "IsActiveMember": is_active_member,
+      "EstimatedSalary": estimated_salary,
+      "CLV": balance * estimated_salary / 100000,
+      "Middle-Aged": 1 if  (30 < age < 45) else 0,
+      "Senior": 1 if (45 < age < 60) else 0,
+      "Elderly": 1 if (60 < age < 100) else 0,
+      "Geography_France": 1 if location == "France" else 0,
+      "Geography_Germany": 1 if location == "Germany" else 0,
+      "Geography_Spain": 1 if location == "Spain" else 0,
+      "Gender_Male": 1 if gender == "Male" else 0,
   }
 
   input_df = pd.DataFrame([input_dict])
   return input_df, input_dict
 
+
 def make_predictions(input_df, input_dict):
   probabilities = {
-    'XGBoost': xgboost_model.predict_proba(input_df)[0][1],
-    'Random Forest': random_forest_model.predict_proba(input_df)[0][1],
-
-    'K-Nearest Neighbors': knn_model.predict_proba(input_df)[0][1],
+      'XGBoost': xgboost_model.predict_proba(input_df)[0][1],
+      'Random Forest': random_forest_model.predict_proba(input_df)[0][1],
+      'K-Nearest Neighbors': knn_model.predict_proba(input_df)[0][1],
   }
 
   avg_probability = np.mean(list(probabilities.values()))
-  
+
   st.markdown("### Model Probabilities")
   for model, prob in probabilities.items():
     st.write(f"- {model}: {prob}")
   st.write(f"Average Probability: {avg_probability}")
 
   return avg_probability
+
 
 def explain_prediction(probability, input_dict, surname):
   prompt = f"""You are an expert data scientist at a bank, where you specialize interpreting and explaining predictions of machine learning models. 
@@ -78,17 +89,22 @@ def explain_prediction(probability, input_dict, surname):
 
             Feature	| Importance
   ---------------------------------------
-      NumOfProducts |	0.330930
-     IsActiveMember | 0.195791
-                Age	| 0.109685
-  Geography_Germany	| 0.081833
-            Balance | 0.054735
-    Geography_Spain |	0.044963
-        Gender_Male | 0.043983
-        CreditScore	| 0.036846
-    EstimatedSalary	| 0.035971
-             Tenure | 0.033146
-          HasCrCard | 0.032117
+       AgeGroup_Senior | 0.659009
+         NumOfProducts | 0.099941
+        IsActiveMember | 0.058348
+                   Age | 0.030739
+     Geography_Germany | 0.026705
+               Balance | 0.017068
+           Gender_Male | 0.015324
+       Geography_Spain | 0.014575
+                   CLV | 0.014402
+           CreditScore | 0.011242
+       EstimatedSalary | 0.011191
+        TenureAgeRatio | 0.011106
+             HasCrCard | 0.010694
+                Tenure | 0.010014
+  AgeGroup_Middle-Aged | 0.009642
+  	  AgeGroup_Elderly | 0.000000
 
   {pd.set_option('display.max_columns', None)}
 
@@ -99,22 +115,22 @@ def explain_prediction(probability, input_dict, surname):
   - If the customer has over a 40% risk of churning, generate a 3 sentance explanation of why they are at risk of churning. 
   - If the customer has less than a 40% risk of churning, generate a 3 sentance explanation of why they might not be at risk of churning.
   - Your explanation should be based on the customer's information, the summary statistics of churred and non-churred customers, and the feature importances provided.
-
   Don't mention the probability of churning or the machine learning model, or say anything like "Based on the machine learning model's prediction and top 10 most important features", just explain the prediciton.
 
   Don't mention how you calculated the probabilities, or the machine learning model, or say anything like "Therefore, I will generate a 3 sentence explanation for why she might not be at risk of churning."
+
+  Do not mention that you are providing a 3-sentance explanation, just explain the prediction.
   """
 
   print("EXPLANATION PROMPT", prompt)
 
-  raw_response = client.chat.completions.create(
-    model="llama-3.2-3b-preview",
-    messages=[{
-      "role": "user",
-      "content": prompt
-    }]
-  )
+  raw_response = client.chat.completions.create(model="llama-3.2-3b-preview",
+                                                messages=[{
+                                                    "role": "user",
+                                                    "content": prompt
+                                                }])
   return raw_response.choices[0].message.content
+
 
 def generate_email(probability, input_dict, explanation, surname):
   prompt = f"""You are a manager at HS Bank. You are responsible for 
@@ -132,23 +148,25 @@ def generate_email(probability, input_dict, explanation, surname):
 
     """
   raw_response = client.chat.completions.create(
-    model="llama-3.1-8b-instant",
+      model="llama-3.1-8b-instant",
       messages=[{
-        "role": "user",
-        "content": prompt
+          "role": "user",
+          "content": prompt
       }],
   )
 
   print("\n\nEMAIL PROMPT", prompt)
 
   return raw_response.choices[0].message.content
-  
+
 
 st.title("Customer Churn Prediction")
 
 df = pd.read_csv("churn.csv")
 
-customers = [f"{row['CustomerId']} - {row['Surname']}" for _, row in df.iterrows()]
+customers = [
+    f"{row['CustomerId']} - {row['Surname']}" for _, row in df.iterrows()
+]
 
 selected_customer_option = st.selectbox("Select a customer", customers)
 
@@ -166,41 +184,60 @@ if selected_customer_option:
   col1, col2 = st.columns(2)
 
   with col1:
-    credit_score = st.number_input(
-      "Credit Score",
-      min_value=300,
-      max_value=850,
-      value=int(selected_customer["CreditScore"]))
+    credit_score = st.number_input("Credit Score",
+                                   min_value=300,
+                                   max_value=850,
+                                   value=int(selected_customer["CreditScore"]))
 
-    location = st.selectbox(
-        "Location", 
-        ["Spain", "France", "Germany"], 
-        index=["Spain", "France", "Germany"].index(selected_customer["Geography"])
-    )
+    location = st.selectbox("Location", ["Spain", "France", "Germany"],
+                            index=["Spain", "France", "Germany"
+                                   ].index(selected_customer["Geography"]))
 
-    gender = st.radio("Gender", ["Male", "Female"], index=0 if selected_customer["Gender"] == 'Male' else 1)
+    gender = st.radio("Gender", ["Male", "Female"],
+                      index=0 if selected_customer["Gender"] == 'Male' else 1)
 
-    age = st.number_input("Age", min_value=18, max_value=100, value=int(selected_customer["Age"]))
+    age = st.number_input("Age",
+                          min_value=18,
+                          max_value=100,
+                          value=int(selected_customer["Age"]))
 
-    tenure = st.number_input("Age", min_value=0, max_value=50, value=int(selected_customer["Tenure"]))
+    tenure = st.number_input("Age",
+                             min_value=0,
+                             max_value=50,
+                             value=int(selected_customer["Tenure"]))
 
   with col2:
-    balance = st.number_input("Balance", min_value=0.0, value=float(selected_customer["Balance"]))
+    balance = st.number_input("Balance",
+                              min_value=0.0,
+                              value=float(selected_customer["Balance"]))
 
-    num_products = st.number_input("Number of Products", min_value=1, max_value=10, value=int(selected_customer["NumOfProducts"]))
+    num_products = st.number_input("Number of Products",
+                                   min_value=1,
+                                   max_value=10,
+                                   value=int(
+                                       selected_customer["NumOfProducts"]))
 
-    has_credit_card = st.checkbox("Has Credit Card", value=bool(selected_customer["HasCrCard"]))
+    has_credit_card = st.checkbox("Has Credit Card",
+                                  value=bool(selected_customer["HasCrCard"]))
 
-    is_active_member = st.checkbox("Is Active Member", value=bool(selected_customer["IsActiveMember"]))
+    is_active_member = st.checkbox("Is Active Member",
+                                   value=bool(
+                                       selected_customer["IsActiveMember"]))
 
-    estimated_salary = st.number_input("Estimated Salary", min_value=0.0, value=float(selected_customer["EstimatedSalary"]))
+    estimated_salary = st.number_input(
+        "Estimated Salary",
+        min_value=0.0,
+        value=float(selected_customer["EstimatedSalary"]))
 
+  input_df, input_dict = prepare_input(credit_score, location, gender, age,
+                                       tenure, balance, num_products,
+                                       has_credit_card, is_active_member,
+                                       estimated_salary)
 
-  input_df, input_dict = prepare_input(credit_score, location, gender, age, tenure, balance, num_products, has_credit_card, is_active_member, estimated_salary)
+  avg_probability = make_predictions(input_df, input_dict)
 
-  avg_probability =  make_predictions(input_df, input_dict)
-
-  explanation = explain_prediction(avg_probability, input_dict, selected_customer["Surname"])
+  explanation = explain_prediction(avg_probability, input_dict,
+                                   selected_customer["Surname"])
 
   st.markdown("---")
 
@@ -208,7 +245,8 @@ if selected_customer_option:
 
   st.markdown(explanation)
 
-  email = generate_email(avg_probability, input_dict, explanation, selected_customer["Surname"])
+  email = generate_email(avg_probability, input_dict, explanation,
+                         selected_customer["Surname"])
 
   st.markdown("---")
 
