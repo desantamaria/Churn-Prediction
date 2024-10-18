@@ -1,38 +1,15 @@
 import streamlit as st
 import pandas as pd
-import pickle
 import numpy as np
 import os
+import requests
+import json
 from openai import OpenAI
 
 client = OpenAI(base_url="https://api.groq.com/openai/v1",
                 api_key=os.environ.get('GROQ_API_KEY'))
 
-
-def load_model(filename):
-    with open(filename, "rb") as file:
-        return pickle.load(file)
-
-
-xgboost_model = load_model('xgb_model.pkl')
-
-naive_bayes_model = load_model('nb_model.pkl')
-
-random_forest_model = load_model('rf_model.pkl')
-
-decision_tree_model = load_model('dt_model.pkl')
-
-extra_trees_model = load_model('et_model.pkl')
-
-svm_model = load_model('svm_model.pkl')
-
-knn_model = load_model('knn_model.pkl')
-
-voting_classifier_model = load_model('voting_clf.pkl')
-
-xgboost_SMOTE_model = load_model('xgboost-SMOTE.pkl')
-
-xgboost_featureEngineered_model = load_model('xgboost-featureEnginered.pkl')
+url = "https://churn-ml-models-114a.onrender.com/predict"
 
 
 def prepare_input(credit_score, location, gender, age, tenure, balance,
@@ -57,26 +34,27 @@ def prepare_input(credit_score, location, gender, age, tenure, balance,
         "Geography_Spain": 1 if location == "Spain" else 0,
         "Gender_Male": 1 if gender == "Male" else 0,
     }
-
-    input_df = pd.DataFrame([input_dict])
-    return input_df, input_dict
+    return input_dict
 
 
-def make_predictions(input_df, input_dict):
-    probabilities = {
-        'XGBoost': xgboost_model.predict_proba(input_df)[0][1],
-        'Random Forest': random_forest_model.predict_proba(input_df)[0][1],
-        'K-Nearest Neighbors': knn_model.predict_proba(input_df)[0][1],
-    }
+def list_results(data):
 
-    avg_probability = np.mean(list(probabilities.values()))
-
+    avg_prediction = int(np.mean(list(data['prediction'].values())))
+    
+    st.markdown("### Model Predictions")
+    for model, pred in data['prediction'].items():
+        st.write(f"- {model}: {pred}")
+    st.write(f"Average Prediction: {avg_prediction}")
+    
+    avg_probability = np.mean(list(data['probability'].values()))
+    
     st.markdown("### Model Probabilities")
-    for model, prob in probabilities.items():
+    for model, prob in data['probability'].items():
         st.write(f"- {model}: {prob}")
     st.write(f"Average Probability: {avg_probability}")
+    
+    return avg_prediction, avg_probability
 
-    return avg_probability
 
 
 def explain_prediction(probability, input_dict, surname):
@@ -85,11 +63,13 @@ def explain_prediction(probability, input_dict, surname):
 Customer Information:
 {input_dict}
 
-Keep in mind that the Age Groups are as follows:
+You will carefully consider that the age in the given customer info falls into one of these categories:
     Young: Age < 30
     Middle-Aged: 30 < Age < 45
     Senior: 45 < Age < 60
     Elderly: 60 < Age < 100
+
+For example, if the customer is 40 years old, you should explain that they are middle-aged. Another example, if the customer is 56 years old, you should explain that they are senior.
 
 Top 10 Key Factors Influencing Churn Risk:
 
@@ -170,14 +150,14 @@ selected_customer_option = st.selectbox("Select a customer", customers)
 
 if selected_customer_option:
     selected_customer_id = int(selected_customer_option.split(" - ")[0])
-    print("Selected Customer ID", selected_customer_id)
+    # print("Selected Customer ID", selected_customer_id)
 
     selected_surname = selected_customer_option.split(" - ")[1]
-    print("Surname", selected_surname)
+    # print("Surname", selected_surname)
 
     selected_customer = df[df["CustomerId"] == selected_customer_id].iloc[0]
 
-    print("Selected Customer", selected_customer)
+    # print("Selected Customer", selected_customer)
 
     col1, col2 = st.columns(2)
 
@@ -201,7 +181,7 @@ if selected_customer_option:
                               max_value=100,
                               value=int(selected_customer["Age"]))
 
-        tenure = st.number_input("Age",
+        tenure = st.number_input("Tenure",
                                  min_value=0,
                                  max_value=50,
                                  value=int(selected_customer["Tenure"]))
@@ -230,27 +210,34 @@ if selected_customer_option:
             min_value=0.0,
             value=float(selected_customer["EstimatedSalary"]))
 
-    input_df, input_dict = prepare_input(credit_score, location, gender, age,
-                                         tenure, balance, num_products,
-                                         has_credit_card, is_active_member,
-                                         estimated_salary)
+    input_dict = prepare_input(credit_score, location, gender, age, tenure,
+                               balance, num_products, has_credit_card,
+                               is_active_member, estimated_salary)
 
-    avg_probability = make_predictions(input_df, input_dict)
+    response = requests.post(url, json=input_dict)
 
-    explanation = explain_prediction(avg_probability, input_dict,
-                                     selected_customer["Surname"])
+    if response.status_code == 200:
+        result = response.json()
 
-    st.markdown("---")
+        avg_prediction, avg_probability = list_results(result)
 
-    st.subheader('Explanation of Prediction')
+        explanation = explain_prediction(avg_probability, input_dict,
+                                         selected_customer["Surname"])
 
-    st.markdown(explanation)
+        st.markdown("---")
 
-    email = generate_email(avg_probability, input_dict, explanation,
-                           selected_customer["Surname"])
+        st.subheader('Explanation of Prediction')
 
-    st.markdown("---")
+        st.markdown(explanation)
 
-    st.subheader("Personalized Email")
+        email = generate_email(avg_probability, input_dict, explanation,
+                               selected_customer["Surname"])
 
-    st.markdown(email)
+        st.markdown("---")
+
+        st.subheader("Personalized Email")
+
+        st.markdown(email)
+
+    else:
+        print("Error:", response.status_code, response.text)
